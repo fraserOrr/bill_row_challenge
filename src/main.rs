@@ -1,7 +1,7 @@
 use rayon::prelude::*;
 use std::fs::File;
 use std::vec::Vec;
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 use std::io::{prelude::*, Error};
 use std::collections::{BTreeMap, HashMap};
 use std::io::BufReader;
@@ -26,18 +26,19 @@ async fn main() -> Result<(),Box<dyn std::error::Error>>{
     let mut btreemap: BTreeMap<String, WeatherData> = BTreeMap::new();
     
     //file stuff
-    let file = File::open("./src/measurements_10m.txt")?;
-    let  buf_reader = BufReader::new(file);
+    
     //thread pool?
     let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
 
-    let (tx, mut rx) = mpsc::channel::<(String, f64)>(100);
+    let (task_tx, mut task_rx) = tokio::sync::mpsc::channel::<(String, f64)>(100);
+    let (thread_tx, thread_rx) = std::sync::mpsc::channel::<(String, f64)>();
 
-
-    //start receiving thread here?
     
-
-  tokio::spawn(async move {
+    
+  //start receiving thread here?
+  thread::spawn( move || {
+    let file = File::open("./src/measurements_10m.txt").expect("no file");
+    let  buf_reader = BufReader::new(file);
     //user current thread to send ? or should i spawn another thread to read and send?
     for line in buf_reader.lines(){
       let content: Vec<String> = line.expect("something there").split(";").map(|m| m.to_string()).collect();
@@ -45,14 +46,23 @@ async fn main() -> Result<(),Box<dyn std::error::Error>>{
       let value: f64 = content[1].parse::<f64>().expect("convert str to int failed");
       let payload: (String, f64) = (name,value);   
       
-        tx.send(payload).await.unwrap();
+      //can we make a lines concurrent
+
+      thread_tx.send(payload).unwrap();
       
     };
 
-  });  
+  }); 
+
+
+
+  
+ 
   let mut hashmap: HashMap<String, WeatherData> = HashMap::new();
+
+  //recieve task
   let handle = tokio::spawn(async move {
-    while let Some(message) = rx.recv().await {
+    for message in thread_rx {
       handle_data3(&mut hashmap, message.0, message.1)
       //print!("Rec : {},{}", message.0,message.1);
     }
@@ -63,6 +73,8 @@ async fn main() -> Result<(),Box<dyn std::error::Error>>{
     
   let duration = start.elapsed();
   println!("Time elapsed in process is: {:?}", duration);
+
+
 
   let hashmap = handle.await.unwrap();
 
@@ -82,12 +94,6 @@ async fn main() -> Result<(),Box<dyn std::error::Error>>{
   let duration = start.elapsed();
   println!("Time elapsed end format is: {:?}", duration);
   Ok(())
-}
-
-async fn handle_payload(rx: Receiver<(String, f64)>) -> HashMap<String, WeatherData> {
-  let mut hashmap: HashMap<String, WeatherData> = HashMap::new();
-
-  return hashmap;
 }
 
 fn handle_data3(hashmap: &mut HashMap<String, WeatherData>, name: String, value: f64){
